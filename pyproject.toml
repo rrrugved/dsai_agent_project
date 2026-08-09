@@ -23,7 +23,6 @@ dependencies = [
     "python-multipart>=0.0.32",
     "qdrant-client>=1.19.0",
     "requests>=2.34.2",
-    "sentence-transformers>=5.7.0",
     "streamlit>=1.61.1",
     "uvicorn>=0.52.1",
     "youtube-transcript-api>=1.2.4",
