@@ -1,12 +1,41 @@
 import os
+import json
+import subprocess
+import wave
 from pathlib import Path
 from dotenv import load_dotenv
 from langchain_core.tools import tool
 from groq import Groq
 
-# Dynamically locate the project root directory containing .env
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
+
+
+def get_audio_duration_seconds(file_path: str) -> float | None:
+    """Return audio duration using ffprobe, with WAV support as a stdlib fallback."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "json", file_path,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        duration = float(json.loads(result.stdout)["format"]["duration"])
+        return duration if duration >= 0 else None
+    except (FileNotFoundError, subprocess.SubprocessError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        pass
+
+    if Path(file_path).suffix.lower() == ".wav":
+        try:
+            with wave.open(file_path, "rb") as audio:
+                return audio.getnframes() / audio.getframerate()
+        except (wave.Error, OSError, ZeroDivisionError):
+            pass
+    return None
 
 @tool
 def transcribe_audio(file_path: str) -> str:

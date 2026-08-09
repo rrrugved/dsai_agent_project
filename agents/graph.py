@@ -12,6 +12,7 @@ from agents.state import AgentState
 from agents.tools import (
     extract_text_from_image,
     transcribe_audio,
+    get_audio_duration_seconds,
     fetch_webpage_content,
     fetch_youtube_transcript,
     parse_pdf
@@ -68,6 +69,22 @@ def _content_to_text(content: Any) -> str:
                 parts.append(str(item))
         return "".join(parts)
     return str(content)
+
+
+def _is_usable_extraction(text: str) -> bool:
+    """Keep tool failures out of the vector database and answer context."""
+    normalized = text.strip().lower()
+    failure_markers = (
+        "error transcribing audio file:",
+        "transcription completed but no speech was detected.",
+        "error processing image with vision ai:",
+        "error extracting text from pdf:",
+    )
+    return (
+        bool(normalized)
+        and not normalized.startswith(("error", "fallback:", "no youtube url detected"))
+        and not any(marker in normalized for marker in failure_markers)
+    )
 
 
 def ingest_and_classify(state: AgentState) -> Dict[str, Any]:
@@ -212,11 +229,16 @@ def planner_and_tool_node(state: AgentState) -> Dict[str, Any]:
         elif ext in [".png", ".jpg", ".jpeg"]:
             trace.append(f"Executing Tool: extract_text_from_image (OCR) on '{filename}'")
             res = extract_text_from_image.invoke({"file_path": path})
+            if _is_usable_extraction(res):
+                res = f"OCR Confidence: unavailable\n\n{res}"
             extracted_map[filename] = res
 
         elif ext in [".mp3", ".wav", ".m4a"]:
             trace.append(f"Executing Tool: transcribe_audio (Whisper) on '{filename}'")
             res = transcribe_audio.invoke({"file_path": path})
+            duration = get_audio_duration_seconds(path)
+            duration_label = f"{duration:.1f} seconds" if duration is not None else "unavailable"
+            res = f"Audio Duration: {duration_label}\n\nTranscript:\n{res}"
             extracted_map[filename] = res
 
     combined_corpus = last_user_message + " " + " ".join(extracted_map.values())
@@ -249,8 +271,13 @@ def rag_ingestion_node(state: AgentState) -> Dict[str, Any]:
     extracted_map = state.get("extracted_text_map", {})
     trace = list(state.get("plan_trace", []))
 
-    if extracted_map:
-        ingest_result = ingest_into_qdrant(extracted_map)
+    usable_extracted_map = {
+        source: content for source, content in extracted_map.items()
+        if _is_usable_extraction(content)
+    }
+
+    if usable_extracted_map:
+        ingest_result = ingest_into_qdrant(usable_extracted_map)
         added_chunks = ingest_result.get("added_chunks", 0)
         skipped_sources = ingest_result.get("skipped_sources", 0)
         if added_chunks:
@@ -260,7 +287,7 @@ def rag_ingestion_node(state: AgentState) -> Dict[str, Any]:
         if not added_chunks and not skipped_sources:
             trace.append("Action: No new chunks were created for Qdrant ingestion.")
     else:
-        trace.append("Action: No text extracted; skipped Qdrant ingestion.")
+        trace.append("Action: No usable extracted text; skipped Qdrant ingestion.")
 
     return {
         "extracted_text_map": extracted_map,
@@ -275,7 +302,10 @@ def retrieval_node(state: AgentState) -> Dict[str, Any]:
     extracted_map = dict(state.get("extracted_text_map", {}))
 
     top_k = select_top_k_for_context(extracted_map)
-    current_source_signatures = source_signatures(extracted_map)
+    current_source_signatures = source_signatures({
+        source: content for source, content in extracted_map.items()
+        if _is_usable_extraction(content)
+    })
     retrieved_text = retrieve_from_qdrant(
         last_user_message,
         top_k=top_k,
@@ -311,10 +341,6 @@ def relevancy_checker_node(state: AgentState) -> Dict[str, Any]:
             "plan_trace": trace
         }
 
-    # A request to summarize/transcribe an uploaded source is intrinsically
-    # grounded in that source.  Asking an LLM whether a short greeting answers
-    # "summarize this audio" is both unnecessary and unstable; it can return
-    # NO even though the transcript is exactly what must be summarized.
     task = state.get("task_category")
     if task == "audio_summary":
         trace.append("Self-Reflection Check: Current audio transcript is valid context for the requested summary.")
@@ -401,13 +427,14 @@ def _build_formatting_instructions(task: str) -> str:
     if task == "audio_summary":
         return """
         You MUST structure your output strictly as follows:
-        1. **Transcription:** <Clean transcript of the audio>
-        2. **1-line Summary:** <One concise sentence summarizing the audio>
-        3. **Key Highlights:**
+        1. **Duration:** <Audio duration, or 'unavailable'>
+        2. **Transcription:** <Clean transcript of the audio>
+        3. **1-line Summary:** <One concise sentence summarizing the audio>
+        4. **Key Highlights:**
            - <Bullet 1>
            - <Bullet 2>
            - <Bullet 3>
-        4. **Detailed Summary:** <Exactly 5 sentences in one paragraph>
+        5. **Detailed Summary:** <Exactly 5 sentences in one paragraph>
         """
     if task == "sentiment":
         return """

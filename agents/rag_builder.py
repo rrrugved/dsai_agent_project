@@ -11,7 +11,14 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams, FieldCondition, Filter, MatchAny
+from qdrant_client.http.models import (
+    Distance,
+    VectorParams,
+    FieldCondition,
+    Filter,
+    MatchAny,
+    PayloadSchemaType,
+)
 from langsmith import traceable
 
 load_dotenv()
@@ -40,6 +47,22 @@ if not client.collection_exists(collection_name=COLLECTION_NAME):
         collection_name=COLLECTION_NAME,
         vectors_config=VectorParams(size=768, distance=Distance.COSINE),
     )
+
+
+def _ensure_source_signature_index() -> None:
+    """Create the payload index required by Qdrant Cloud filtered search."""
+    collection = client.get_collection(collection_name=COLLECTION_NAME)
+    payload_schema = collection.payload_schema or {}
+    field_name = "metadata.source_signature"
+    if field_name not in payload_schema:
+        client.create_payload_index(
+            collection_name=COLLECTION_NAME,
+            field_name=field_name,
+            field_schema=PayloadSchemaType.KEYWORD,
+        )
+
+
+_ensure_source_signature_index()
 
 vector_store = QdrantVectorStore(
     client=client,
@@ -152,6 +175,11 @@ def retrieve_from_qdrant(
     Embeds the user query, searches Qdrant for the most relevant chunks,
     and returns them as a single formatted string for the LLM.
     """
+    # An explicitly empty allow-list means every extraction attempt failed.
+    # Do not silently fall back to the whole persistent collection.
+    if allowed_source_signatures is not None and not allowed_source_signatures:
+        return ""
+
     # The collection is persistent and shared by every previous upload.  Without
     # this payload filter, a vague instruction (for example, "summarize this
     # audio") often retrieves an unrelated, older document.
