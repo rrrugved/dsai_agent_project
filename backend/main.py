@@ -20,7 +20,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+def read_root():
+    return {"status": "ok", "message": "DSAI Backend API is running"}
 
+    
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
