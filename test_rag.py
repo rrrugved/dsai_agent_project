@@ -1,6 +1,18 @@
-from agents.rag_builder import ingest_into_qdrant, retrieve_from_qdrant
+import os
 
+import pytest
+
+
+REQUIRED_ENV_VARS = ("GOOGLE_API_KEY", "QDRANT_URL", "QDRANT_API_KEY")
+
+
+@pytest.mark.skipif(
+    any(not os.getenv(name) for name in REQUIRED_ENV_VARS),
+    reason="RAG smoke test requires Google and Qdrant credentials.",
+)
 def test_pipeline():
+    from agents.rag_builder import ingest_into_qdrant, retrieve_from_qdrant
+
     fake_extracted_map = {
         "science_paper.pdf": (
             "The mitochondria is the powerhouse of the cell. It generates most of the chemical energy "

@@ -28,14 +28,37 @@ load_dotenv()
 
 llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.2)
 
+
+def _external_url_limit() -> int:
+    """Read a safe per-request cap without letting a bad env value break a run."""
+    try:
+        return max(0, int(os.getenv("MAX_EXTERNAL_URLS_PER_REQUEST", "2")))
+    except ValueError:
+        return 2
+
 def _detect_urls(text: str) -> List[str]:
     """Extracts all HTTP/HTTPS URLs from a given text string."""
     url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
-    return re.findall(url_pattern, text)
+    # Remove punctuation adjacent to URLs in prose, then preserve order while
+    # avoiding duplicate external requests for the same link.
+    matches = re.findall(url_pattern, text)
+    urls = [match.rstrip(".,;:!?)]}>'\"") for match in matches]
+    urls = [f"https://{url}" if url.lower().startswith("www.") else url for url in urls]
+    return list(dict.fromkeys(url for url in urls if url))
 
 def _is_youtube_url(url: str) -> bool:
     """Validates if a parsed URL belongs to the YouTube domain."""
     return "youtube.com" in url.lower() or "youtu.be" in url.lower()
+
+
+def _prompt_requests_embedded_urls(prompt: str) -> bool:
+    """Whether links found *inside* an upload are needed for the user task."""
+    normalized = prompt.lower()
+    intent_markers = (
+        "youtube", "yt ", "video", "url", "link", "website", "web page",
+        "webpage", "article", "fetch", "open", "visit", "browse",
+    )
+    return any(marker in normalized for marker in intent_markers)
 
 def _get_last_user_message(messages: List[Any]) -> str:
     """Helper function to extract the text content of the last user message across turns."""
@@ -241,10 +264,27 @@ def planner_and_tool_node(state: AgentState) -> Dict[str, Any]:
             res = f"Audio Duration: {duration_label}\n\nTranscript:\n{res}"
             extracted_map[filename] = res
 
-    combined_corpus = last_user_message + " " + " ".join(extracted_map.values())
+    # A research PDF can contain dozens of citations.  Those links are not
+    # evidence the user asked us to fetch when they only request a PDF summary.
+    # Direct URLs in the prompt are always eligible; embedded URLs require an
+    # explicit link/video/web request and are capped to control cost and time.
+    prompt_urls = _detect_urls(last_user_message)
+    embedded_urls = _detect_urls(" ".join(extracted_map.values()))
+    found_urls = list(dict.fromkeys(prompt_urls))
+    if _prompt_requests_embedded_urls(last_user_message):
+        found_urls.extend(url for url in embedded_urls if url not in found_urls)
+    elif embedded_urls:
+        trace.append(
+            f"Action: Skipped {len(embedded_urls)} embedded URL(s); the request did not ask to fetch links."
+        )
 
-
-    found_urls = _detect_urls(combined_corpus)
+    url_limit = _external_url_limit()
+    if len(found_urls) > url_limit:
+        trace.append(
+            f"Resource guard: Fetching {url_limit} of {len(found_urls)} requested URL(s); "
+            "set MAX_EXTERNAL_URLS_PER_REQUEST to change this limit."
+        )
+        found_urls = found_urls[:url_limit]
 
     for url in found_urls:
         if _is_youtube_url(url):
@@ -259,7 +299,10 @@ def planner_and_tool_node(state: AgentState) -> Dict[str, Any]:
             trace.append(f"Executing Tool: fetch_webpage_content for '{url}'")
             res = fetch_webpage_content.invoke(url)
             extracted_map[f"Web: {url}"] = res
-            trace.append(f"Action: Successfully scraped webpage and added to context map.")
+            if _is_usable_extraction(res):
+                trace.append("Action: Successfully scraped webpage and added to context map.")
+            else:
+                trace.append(f"Warning: Webpage content could not be fetched: {res}")
 
     return {
         "extracted_text_map": extracted_map,

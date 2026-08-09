@@ -7,12 +7,15 @@ import pymupdf as fitz
 from PIL import Image, ImageDraw, ImageFont
 from langchain_core.messages import HumanMessage
 
-from agents.graph import graph
-
-
 PDF_PATH = Path(__file__).resolve().parents[1] / "LLM_Guide_and_Video_Links-v2.pdf"
 AUDIO_PATH = Path(__file__).resolve().parents[1] / "sample-10s.mp3"
-REQUIRED_ENV_VARS = ("GOOGLE_API_KEY", "QDRANT_URL", "QDRANT_API_KEY")
+REQUIRED_ENV_VARS = ("GOOGLE_API_KEY", "GROQ_API_KEY", "QDRANT_URL", "QDRANT_API_KEY")
+
+
+def _graph():
+    """Import only after the integration-test skip condition is evaluated."""
+    from agents.graph import graph
+    return graph
 
 
 def _create_scanned_pdf(temp_dir: Path) -> Path:
@@ -47,7 +50,7 @@ def test_route_level_pdf_and_youtube_flow():
     assert PDF_PATH.exists(), f"Expected PDF to exist at {PDF_PATH}"
 
     config = {"configurable": {"thread_id": "route-level-smoke-test"}}
-    result = graph.invoke(
+    result = _graph().invoke(
         {
             "messages": [
                 HumanMessage(
@@ -83,7 +86,7 @@ def test_route_level_audio_summary_flow():
     assert AUDIO_PATH.exists(), f"Expected audio file to exist at {AUDIO_PATH}"
 
     config = {"configurable": {"thread_id": "route-level-audio-test"}}
-    result = graph.invoke(
+    result = _graph().invoke(
         {
             "messages": [HumanMessage(content="Summarize the attached audio.")],
             "file_paths": [str(AUDIO_PATH)],
@@ -96,6 +99,7 @@ def test_route_level_audio_summary_flow():
 
     assert any("transcribe_audio" in step for step in trace)
     assert any("Synthesized final structured answer" in step for step in trace)
+    assert "Duration" in final_text
     assert "Transcription" in final_text
     assert "1-line Summary" in final_text
     assert "Detailed Summary" in final_text
@@ -111,7 +115,7 @@ def test_route_level_scanned_pdf_ocr_fallback():
         scanned_pdf = _create_scanned_pdf(tmp_dir)
 
         config = {"configurable": {"thread_id": "route-level-scanned-pdf-test"}}
-        result = graph.invoke(
+        result = _graph().invoke(
             {
                 "messages": [HumanMessage(content="What does the scanned PDF say?")],
                 "file_paths": [str(scanned_pdf)],

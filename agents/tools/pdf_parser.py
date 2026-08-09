@@ -2,7 +2,7 @@ import io
 import os
 import tempfile
 from statistics import mean
-
+from langchain_core.tools import tool
 try:
     import pymupdf as fitz
 except ImportError:
@@ -10,13 +10,11 @@ except ImportError:
 
 from PIL import Image
 import pytesseract
-from langchain_core.tools import tool
 
 
 def _clean_text(text: str) -> str:
     return "\n".join(line.strip() for line in text.splitlines() if line.strip())
 
-@tool
 def _ocr_page_with_tesseract(page) -> tuple[str, float | None]:
     """Run OCR over a rendered page and return text plus average confidence."""
     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
@@ -43,7 +41,6 @@ def _ocr_page_with_tesseract(page) -> tuple[str, float | None]:
 
     return " ".join(words).strip(), (mean(confs) if confs else None)
 
-@tool
 def _ocr_page_with_vision(page) -> str:
     """Fallback OCR using the existing image transcription tool if local OCR fails."""
     from agents.tools.ocr_tool import extract_text_from_image

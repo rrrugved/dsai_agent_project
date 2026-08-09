@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import threading
+import uuid
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Any, Dict, Iterator, List, Optional
@@ -16,7 +17,11 @@ from agents.graph import graph
 def _write_upload_to_temp(uploaded_file, temp_dir: Path) -> Path:
     suffix = Path(uploaded_file.filename).suffix or ".bin"
     safe_name = Path(uploaded_file.filename).name
-    temp_path = (temp_dir / safe_name).with_suffix(suffix)
+    # Two attachments can legitimately share a filename. Keep the display name
+    # elsewhere, but give each temporary copy a unique filesystem name.
+    temp_path = temp_dir / f"{uuid.uuid4().hex}_{safe_name}"
+    if temp_path.suffix != suffix:
+        temp_path = temp_path.with_suffix(suffix)
     temp_path.write_bytes(uploaded_file.file.read())
     return temp_path
 

@@ -1,8 +1,9 @@
 import uuid
 from langchain_core.messages import HumanMessage
-from agents.graph import graph
 
 def run_test():
+    from agents.graph import graph
+
     print("Agent initialized! Type 'quit' to exit.")
     
     thread_id = str(uuid.uuid4())
