@@ -9,18 +9,14 @@ from typing import Any, Dict, List
 import requests
 import streamlit as st
 
-
-FASTAPI_URL = os.getenv("FASTAPI_URL", "http://127.0.0.1:8000")
-
+BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="Multi-Modal Agent", page_icon="💬", layout="centered")
-
 
 def _new_chat() -> None:
     st.session_state.session_id = str(uuid.uuid4())
     st.session_state.messages = []
     st.session_state.attached_files = []
-
 
 def _init_state() -> None:
     if "session_id" not in st.session_state:
@@ -29,7 +25,6 @@ def _init_state() -> None:
         st.session_state.messages = []
     if "attached_files" not in st.session_state:
         st.session_state.attached_files = []
-
 
 def _mime_type(filename: str) -> str:
     ext = os.path.splitext(filename)[1].lower()
@@ -47,14 +42,13 @@ def _mime_type(filename: str) -> str:
         return "audio/mp4"
     return "application/octet-stream"
 
-
 def _call_backend(query: str, files: List[Dict[str, Any]], session_id: str) -> Dict[str, Any]:
     multipart_files = [
         ("files", (item["name"], io.BytesIO(item["bytes"]), item["mime_type"]))
         for item in files
     ]
     response = requests.post(
-        f"{FASTAPI_URL.rstrip('/')}/chat",
+        f"{BACKEND_URL.rstrip('/')}/chat",
         data={"query": query, "session_id": session_id},
         files=multipart_files or None,
         timeout=600,
@@ -62,14 +56,13 @@ def _call_backend(query: str, files: List[Dict[str, Any]], session_id: str) -> D
     response.raise_for_status()
     return response.json()
 
-
 def _call_backend_stream(query: str, files: List[Dict[str, Any]], session_id: str):
     multipart_files = [
         ("files", (item["name"], io.BytesIO(item["bytes"]), item["mime_type"]))
         for item in files
     ]
     response = requests.post(
-        f"{FASTAPI_URL.rstrip('/')}/chat/stream",
+        f"{BACKEND_URL.rstrip('/')}/chat/stream",
         data={"query": query, "session_id": session_id},
         files=multipart_files or None,
         stream=True,
@@ -102,7 +95,6 @@ def _call_backend_stream(query: str, files: List[Dict[str, Any]], session_id: st
         }
     yield {"kind": "final", "payload": final_payload}
 
-
 def _source_label(source_name: str) -> str:
     lowered = source_name.lower()
     if lowered.startswith("you tube:") or lowered.startswith("youtube:"):
@@ -119,7 +111,6 @@ def _source_label(source_name: str) -> str:
         return "Audio Transcript"
     return "Source"
 
-
 def _render_extracted_blocks(extracted_map: Dict[str, str]) -> None:
     if not extracted_map:
         st.markdown("_No extracted text returned._")
@@ -132,7 +123,6 @@ def _render_extracted_blocks(extracted_map: Dict[str, str]) -> None:
             st.markdown(f"**{_source_label(source_name)}**")
             st.caption(source_name)
             st.markdown(content)
-
 
 _init_state()
 
@@ -179,7 +169,7 @@ with st.sidebar:
         st.caption("No attached files yet.")
 
     st.divider()
-    st.caption(f"Backend: `{FASTAPI_URL}`")
+    st.caption(f"Backend: `{BACKEND_URL}`")
 
 st.title("Multi-Modal Agent Terminal")
 st.markdown(

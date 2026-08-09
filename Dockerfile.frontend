@@ -1,0 +1,28 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# The frontend does not need ffmpeg or tesseract, only tini
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends tini \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add uv's virtual environment to PATH
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Install uv
+RUN pip install --no-cache-dir uv
+
+# Cache the dependencies layer
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Copy the rest of the application
+COPY . ./
+RUN uv sync --frozen --no-dev
+
+EXPOSE 10000
+
+# Use Tini to manage the Streamlit process cleanly
+ENTRYPOINT ["tini", "--"]
+CMD ["streamlit", "run", "frontend/app.py", "--server.port", "10000", "--server.address", "0.0.0.0", "--server.headless", "true"]
