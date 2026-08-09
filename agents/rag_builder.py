@@ -11,7 +11,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams
+from qdrant_client.http.models import Distance, VectorParams, FieldCondition, Filter, MatchAny
 from langsmith import traceable
 
 load_dotenv()
@@ -65,8 +65,20 @@ def _save_ingestion_cache(signatures: set[str]) -> None:
 
 
 def _source_signature(source_name: str, content: str) -> str:
-    normalized = f"{source_name}\n{content}".encode("utf-8", errors="ignore")
+    # Keep this versioned.  Earlier records did not store a signature in their
+    # Qdrant payload, so a new version deliberately re-ingests each source once
+    # with the metadata needed to scope retrieval to the current request.
+    normalized = f"v2\n{source_name}\n{content}".encode("utf-8", errors="ignore")
     return hashlib.sha256(normalized).hexdigest()
+
+
+def source_signatures(extracted_map: Dict[str, str]) -> List[str]:
+    """Return stable IDs for the sources extracted in the current request."""
+    return [
+        _source_signature(source_name, content)
+        for source_name, content in extracted_map.items()
+        if content and content.strip()
+    ]
 
 @traceable(name="qdrant_ingestion", run_type="chain")
 def ingest_into_qdrant(extracted_map: Dict[str, str]) -> Dict[str, int]:
@@ -85,7 +97,13 @@ def ingest_into_qdrant(extracted_map: Dict[str, str]) -> Dict[str, int]:
         if signature in cache:
             skipped_sources += 1
             continue
-        doc = Document(page_content=content, metadata={"source": source_name})
+        doc = Document(
+            page_content=content,
+            metadata={
+                "source": source_name,
+                "source_signature": signature,
+            },
+        )
         documents.append(doc)
         cache.add(signature)
 
@@ -125,12 +143,30 @@ def select_top_k_for_context(extracted_map: Dict[str, str]) -> int:
     return DEFAULT_TOP_K
 
 @traceable(name="qdrant_retrieval", run_type="retriever")
-def retrieve_from_qdrant(query: str, top_k: int = DEFAULT_TOP_K) -> str:
+def retrieve_from_qdrant(
+    query: str,
+    top_k: int = DEFAULT_TOP_K,
+    allowed_source_signatures: List[str] | None = None,
+) -> str:
     """
     Embeds the user query, searches Qdrant for the most relevant chunks,
     and returns them as a single formatted string for the LLM.
     """
-    retrieved_docs = vector_store.similarity_search(query, k=top_k)
+    # The collection is persistent and shared by every previous upload.  Without
+    # this payload filter, a vague instruction (for example, "summarize this
+    # audio") often retrieves an unrelated, older document.
+    query_filter = None
+    if allowed_source_signatures:
+        query_filter = Filter(
+            must=[
+                FieldCondition(
+                    key="metadata.source_signature",
+                    match=MatchAny(any=allowed_source_signatures),
+                )
+            ]
+        )
+
+    retrieved_docs = vector_store.similarity_search(query, k=top_k, filter=query_filter)
     
     if not retrieved_docs:
         return ""

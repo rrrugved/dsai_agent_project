@@ -20,6 +20,7 @@ from agents.rag_builder import (
     ingest_into_qdrant,
     retrieve_from_qdrant,
     select_top_k_for_context,
+    source_signatures,
 )
 
 load_dotenv()
@@ -274,7 +275,12 @@ def retrieval_node(state: AgentState) -> Dict[str, Any]:
     extracted_map = dict(state.get("extracted_text_map", {}))
 
     top_k = select_top_k_for_context(extracted_map)
-    retrieved_text = retrieve_from_qdrant(last_user_message, top_k=top_k)
+    current_source_signatures = source_signatures(extracted_map)
+    retrieved_text = retrieve_from_qdrant(
+        last_user_message,
+        top_k=top_k,
+        allowed_source_signatures=current_source_signatures,
+    )
     trace.append(f"Action: Retrieval depth selected dynamically (top_k={top_k}).")
     
     if retrieved_text:
@@ -303,6 +309,20 @@ def relevancy_checker_node(state: AgentState) -> Dict[str, Any]:
             "extracted_text_map": state.get("extracted_text_map", {}),
             "retrieved_context": retrieved_context,
             "plan_trace": trace
+        }
+
+    # A request to summarize/transcribe an uploaded source is intrinsically
+    # grounded in that source.  Asking an LLM whether a short greeting answers
+    # "summarize this audio" is both unnecessary and unstable; it can return
+    # NO even though the transcript is exactly what must be summarized.
+    task = state.get("task_category")
+    if task == "audio_summary":
+        trace.append("Self-Reflection Check: Current audio transcript is valid context for the requested summary.")
+        return {
+            "is_context_relevant": True,
+            "extracted_text_map": state.get("extracted_text_map", {}),
+            "retrieved_context": retrieved_context,
+            "plan_trace": trace,
         }
 
     checker_prompt = f"""
@@ -417,9 +437,7 @@ def route_after_classify(state: AgentState) -> Literal["followup_node", "direct_
 
 def route_after_relevancy(state: AgentState) -> Literal["synthesizer_node", "followup_node"]:
     """Routes execution to synthesis or follow-up based on context relevancy."""
-    retrieved_context = state.get("retrieved_context", "")
-
-    if not retrieved_context:
+    if not state.get("retrieved_context") or state.get("is_context_relevant") is not True:
         return "followup_node"
     return "synthesizer_node"
 
