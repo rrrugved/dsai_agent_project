@@ -39,8 +39,6 @@ def _external_url_limit() -> int:
 def _detect_urls(text: str) -> List[str]:
     """Extracts all HTTP/HTTPS URLs from a given text string."""
     url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
-    # Remove punctuation adjacent to URLs in prose, then preserve order while
-    # avoiding duplicate external requests for the same link.
     matches = re.findall(url_pattern, text)
     urls = [match.rstrip(".,;:!?)]}>'\"") for match in matches]
     urls = [f"https://{url}" if url.lower().startswith("www.") else url for url in urls]
@@ -222,7 +220,8 @@ def followup_node(state: AgentState) -> Dict[str, Any]:
 def direct_llm_node(state: AgentState) -> Dict[str, Any]:
     """Bypasses tool execution to directly answer conversational queries."""
     messages = state["messages"]
-    response = llm.invoke(messages)
+    response_text = "".join(_content_to_text(chunk.content) for chunk in llm.stream(messages))
+    response = AIMessage(content=response_text)
     
     trace = list(state.get("plan_trace", []))
     trace.append("Action: Answered query directly using internal LLM knowledge.")
@@ -443,8 +442,7 @@ def synthesizer_node(state: AgentState) -> Dict[str, Any]:
         HumanMessage(content=last_user_message)
     ]
 
-    response = llm.invoke(full_messages)
-    final_text = _content_to_text(response.content)
+    final_text = "".join(_content_to_text(chunk.content) for chunk in llm.stream(full_messages))
 
     trace = list(state.get("plan_trace", []))
     trace.append("Action: Synthesized final structured answer.")

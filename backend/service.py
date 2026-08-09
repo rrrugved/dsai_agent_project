@@ -37,6 +37,39 @@ def _format_extracted_text(extracted_text_map: Dict[str, str]) -> str:
     return "\n\n".join(sections)
 
 
+def _content_to_text(content: Any) -> str:
+    """Normalize streamed LangChain message content to plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            item if isinstance(item, str) else item.get("text", "") if isinstance(item, dict) else str(item)
+            for item in content
+        )
+    return str(content or "")
+
+
+def _build_response_payload(
+    result: Dict[str, Any],
+    query: str,
+    session_id: str,
+    uploaded_files: Optional[List[object]],
+) -> Dict[str, object]:
+    extracted_text_map = result.get("extracted_text_map", {}) or {}
+    final_message = result["messages"][-1].content
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "query": query,
+        "files_received": [getattr(f, "filename", "") for f in (uploaded_files or [])],
+        "extracted_text_map": extracted_text_map,
+        "retrieved_context": result.get("retrieved_context"),
+        "plan_trace": result.get("plan_trace", []),
+        "final_output": _content_to_text(final_message),
+        "extracted_text": _format_extracted_text(extracted_text_map),
+    }
+
+
 @traceable(name="dsai_agent_request", run_type="chain")
 def _execute_graph_request(
     query: str,
@@ -73,22 +106,7 @@ def _execute_graph_request(
                 },
             )
 
-            extracted_text_map = result.get("extracted_text_map", {}) or {}
-            retrieved_context = result.get("retrieved_context")
-            final_message = result["messages"][-1].content
-            final_output = final_message if isinstance(final_message, str) else str(final_message)
-
-            return {
-                "status": "success",
-                "session_id": session_id,
-                "query": query,
-                "files_received": [getattr(f, "filename", "") for f in (uploaded_files or [])],
-                "extracted_text_map": extracted_text_map,
-                "retrieved_context": retrieved_context,
-                "plan_trace": result.get("plan_trace", []),
-                "final_output": final_output,
-                "extracted_text": _format_extracted_text(extracted_text_map),
-            }
+            return _build_response_payload(result, query, session_id, uploaded_files)
     finally:
         for temp_path in temp_paths:
             try:
@@ -114,16 +132,52 @@ def stream_agent_request(
     result_holder: Dict[str, Any] = {}
 
     def _worker() -> None:
+        temp_paths: List[Path] = []
         try:
-            result_holder["payload"] = _execute_graph_request(
-                query=query,
-                session_id=session_id,
-                uploaded_files=uploaded_files,
-            )
-            event_queue.put({"type": "result", "payload": result_holder["payload"]})
+            with tempfile.TemporaryDirectory(prefix="dsai_agent_") as temp_dir_name:
+                temp_dir = Path(temp_dir_name)
+                file_paths: List[str] = []
+                for uploaded_file in uploaded_files or []:
+                    temp_path = _write_upload_to_temp(uploaded_file, temp_dir)
+                    temp_paths.append(temp_path)
+                    file_paths.append(str(temp_path))
+
+                graph_config = {
+                    "configurable": {"thread_id": session_id},
+                    "run_name": "dsai_agent_graph",
+                    "tags": ["dsai-agent", "request"],
+                    "metadata": {
+                        "session_id": session_id,
+                        "uploaded_file_count": len(uploaded_files or []),
+                    },
+                }
+                for message, metadata in graph.stream(
+                    {
+                        "messages": [HumanMessage(content=query)],
+                        "file_paths": file_paths,
+                    },
+                    config=graph_config,
+                    stream_mode="messages",
+                ):
+                    if metadata.get("langgraph_node") not in {"direct_llm_node", "synthesizer_node"}:
+                        continue
+                    token = _content_to_text(getattr(message, "content", ""))
+                    if token:
+                        event_queue.put({"type": "token", "text": token})
+
+                result = graph.get_state(graph_config).values
+                result_holder["payload"] = _build_response_payload(
+                    result, query, session_id, uploaded_files
+                )
+                event_queue.put({"type": "result", "payload": result_holder["payload"]})
         except Exception as exc:
             event_queue.put({"type": "error", "text": str(exc)})
         finally:
+            for temp_path in temp_paths:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
             event_queue.put({"type": "done"})
 
     worker = threading.Thread(target=_worker, daemon=True)

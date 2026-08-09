@@ -62,9 +62,6 @@ GROQ_API_KEY=...
 QDRANT_URL=https://your-cluster.qdrant.io
 QDRANT_API_KEY=...
 
-# Optional, only when tesseract is not on PATH.
-TESSERACT_CMD=/usr/bin/tesseract
-
 # Streamlit uses this to call FastAPI.
 BACKEND_URL=http://127.0.0.1:8000
 
@@ -117,7 +114,7 @@ For a public deployment, set the same environment variables in the deployment pr
 - `session_id`: optional UI conversation identifier
 - `files`: zero or more PDF, PNG, JPG/JPEG, MP3, WAV, or M4A uploads
 
-`POST /chat/stream` returns newline-delimited JSON status and final-result events. The current implementation streams status events and the final result; it does not token-stream the model response.
+`POST /chat/stream` returns newline-delimited JSON events. It sends an initial status event, streams Gemini answer chunks as `token` events, and finishes with a `result` event containing the complete answer, extraction map, and plan trace.
 
 `GET /health` returns the backend health status.
 
