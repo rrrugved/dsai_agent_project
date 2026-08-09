@@ -15,4 +15,3 @@ class AgentState(TypedDict):
     plan_trace: List[str]
     task_category: Optional[str]
     is_context_relevant: Optional[bool]
-    stream_queue: Optional[Any]

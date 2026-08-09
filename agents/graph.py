@@ -353,24 +353,9 @@ def synthesizer_node(state: AgentState) -> Dict[str, Any]:
         SystemMessage(content=system_instructions),
         HumanMessage(content=last_user_message)
     ]
-    stream_queue = state.get("stream_queue")
 
-    if stream_queue is not None:
-        final_text_parts: List[str] = []
-        final_text = ""
-        try:
-            stream_queue.put({"type": "status", "text": "Generating answer..."})
-            for chunk in llm.stream(full_messages):
-                chunk_text = _content_to_text(getattr(chunk, "content", ""))
-                if chunk_text:
-                    final_text_parts.append(chunk_text)
-                    stream_queue.put({"type": "token", "text": chunk_text})
-            final_text = "".join(final_text_parts)
-        finally:
-            stream_queue.put({"type": "finalized"})
-    else:
-        response = llm.invoke(full_messages)
-        final_text = _content_to_text(response.content)
+    response = llm.invoke(full_messages)
+    final_text = _content_to_text(response.content)
 
     trace = list(state.get("plan_trace", []))
     trace.append("Action: Synthesized final structured answer.")

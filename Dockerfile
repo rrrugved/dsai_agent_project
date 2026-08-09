@@ -1,33 +1,34 @@
-# 1. Use a lightweight Python base image
 FROM python:3.11-slim
 
-# 2. Set the working directory inside the container
 WORKDIR /app
 
-# 3. Install critical system dependencies (ffmpeg is REQUIRED for Whisper)
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    git \
+# Runtime tools used by Whisper and pytesseract.
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ffmpeg tesseract-ocr tini \
     && rm -rf /var/lib/apt/lists/*
 
-# 4. Install 'uv' package manager
+# Keep the virtual environment in the project and make its commands available.
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    LANGSMITH_TRACING=true \
+    LANGSMITH_PROJECT=dsai-agent-project \
+    PATH="/app/.venv/bin:$PATH"
+
 RUN pip install --no-cache-dir uv
 
-# 5. Copy your project files into the container
-COPY . /app
+# Install the exact locked, production dependency set first. This layer is
+# reused unless the project manifest or lockfile changes.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
 
-# 6. Install Python dependencies system-wide inside the container using uv
-RUN uv pip install --system \
-    langchain-core \
-    langchain-google-genai \
-    openai-whisper \
-    requests \
-    beautifulsoup4 \
-    python-dotenv
+# Copy the application only after dependencies have been installed, then
+# install the project itself without changing the lockfile.
+COPY . ./
+RUN uv sync --frozen --no-dev \
+    && chmod +x /app/start.sh
 
-# 7. Expose the port your frontend/API will run on (e.g., FastAPI or Streamlit)
+EXPOSE 10000
 EXPOSE 8000
 
-# 8. Define the default command to start your application
-# (We will update this once you build your main server/graph file)
-CMD ["python", "app.py"]
+ENTRYPOINT ["tini", "--"]
+CMD ["/app/start.sh"]

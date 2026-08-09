@@ -12,6 +12,7 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
+from langsmith import traceable
 
 load_dotenv()
 
@@ -67,6 +68,7 @@ def _source_signature(source_name: str, content: str) -> str:
     normalized = f"{source_name}\n{content}".encode("utf-8", errors="ignore")
     return hashlib.sha256(normalized).hexdigest()
 
+@traceable(name="qdrant_ingestion", run_type="chain")
 def ingest_into_qdrant(extracted_map: Dict[str, str]) -> Dict[str, int]:
     """
     Takes the raw extracted text dictionary, chunks it, and upserts it into Qdrant.
@@ -122,6 +124,7 @@ def select_top_k_for_context(extracted_map: Dict[str, str]) -> int:
         return min(8, estimated_chunks + 1)
     return DEFAULT_TOP_K
 
+@traceable(name="qdrant_retrieval", run_type="retriever")
 def retrieve_from_qdrant(query: str, top_k: int = DEFAULT_TOP_K) -> str:
     """
     Embeds the user query, searches Qdrant for the most relevant chunks,

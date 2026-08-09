@@ -8,6 +8,7 @@ from queue import Empty, Queue
 from typing import Any, Dict, Iterator, List, Optional
 
 from langchain_core.messages import HumanMessage
+from langsmith import traceable
 
 from agents.graph import graph
 
@@ -31,11 +32,11 @@ def _format_extracted_text(extracted_text_map: Dict[str, str]) -> str:
     return "\n\n".join(sections)
 
 
+@traceable(name="dsai_agent_request", run_type="chain")
 def _execute_graph_request(
     query: str,
     session_id: str,
     uploaded_files: Optional[List[object]] = None,
-    stream_queue: Optional[Queue] = None,
 ) -> Dict[str, object]:
     temp_paths: List[Path] = []
 
@@ -53,12 +54,18 @@ def _execute_graph_request(
                 "messages": [HumanMessage(content=query)],
                 "file_paths": file_paths,
             }
-            if stream_queue is not None:
-                state_input["stream_queue"] = stream_queue
 
             result = graph.invoke(
                 state_input,
-                config={"configurable": {"thread_id": session_id}},
+                config={
+                    "configurable": {"thread_id": session_id},
+                    "run_name": "dsai_agent_graph",
+                    "tags": ["dsai-agent", "request"],
+                    "metadata": {
+                        "session_id": session_id,
+                        "uploaded_file_count": len(uploaded_files or []),
+                    },
+                },
             )
 
             extracted_text_map = result.get("extracted_text_map", {}) or {}
@@ -107,7 +114,6 @@ def stream_agent_request(
                 query=query,
                 session_id=session_id,
                 uploaded_files=uploaded_files,
-                stream_queue=event_queue,
             )
             event_queue.put({"type": "result", "payload": result_holder["payload"]})
         except Exception as exc:
@@ -135,4 +141,3 @@ def stream_agent_request(
             yield json.dumps(event) + "\n"
         elif event_type == "done":
             break
-
