@@ -58,6 +58,92 @@ def _prompt_requests_embedded_urls(prompt: str) -> bool:
     )
     return any(marker in normalized for marker in intent_markers)
 
+
+def _prompt_requests_attachment_context(prompt: str) -> bool:
+    """Decide whether the current user message is really about the attached files."""
+    normalized = re.sub(r"\s+", " ", prompt.lower()).strip()
+    if not normalized:
+        return False
+
+    ignore_markers = (
+        "don't search in files",
+        "dont search in files",
+        "do not search in files",
+        "ignore files",
+        "ignore the files",
+        "ignore the file",
+        "without files",
+        "random question",
+        "general question",
+        "not about the file",
+        "not about files",
+    )
+    if any(marker in normalized for marker in ignore_markers):
+        return False
+
+    attachment_markers = (
+        "attached",
+        "attachment",
+        "attached file",
+        "attached files",
+        "uploaded file",
+        "uploaded files",
+        "this pdf",
+        "that pdf",
+        "the pdf",
+        "this document",
+        "that document",
+        "the document",
+        "this file",
+        "that file",
+        "the file",
+        "pdf",
+        "document",
+        "file",
+        "files",
+        "image",
+        "photo",
+        "picture",
+        "screenshot",
+        "audio",
+        "recording",
+        "transcript",
+        "video",
+        "link",
+        "url",
+        "web page",
+        "webpage",
+        "website",
+        "paper",
+        "report",
+        "resume",
+        "job",
+        "requirements",
+        "responsibilities",
+        "skills",
+        "summarize",
+        "summary",
+        "explain",
+        "extract",
+        "analyze",
+        "analyse",
+        "compare",
+        "review",
+        "transcribe",
+        "what does it say",
+        "what's in",
+        "what is in",
+        "what are the",
+        "what is this",
+        "what's this",
+        "tell me about this",
+        "give me the gist",
+        "read this",
+        "look at this",
+        "find in this",
+    )
+    return any(marker in normalized for marker in attachment_markers)
+
 def _get_last_user_message(messages: List[Any]) -> str:
     """Helper function to extract the text content of the last user message across turns."""
     for msg in reversed(messages):
@@ -132,27 +218,54 @@ def ingest_and_classify(state: AgentState) -> Dict[str, Any]:
     }
 
     if has_files or has_urls:
+        attachment_request = has_urls or _prompt_requests_attachment_context(clean_prompt)
+        if has_files and not attachment_request:
+            return {
+                **base_state_reset,
+                "intent_type": "conversational",
+                "needs_clarification": False,
+                "plan_trace": [
+                    "Input received: Attached file(s) detected, but the prompt does not appear to ask about them. Routing to Direct LLM."
+                ],
+                "task_category": "qa"
+            }
+
         intent_prompt = f"""
         Analyze the following user prompt which accompanies an uploaded file or link.
         
-        Step 1: Determine if the prompt contains a specific, actionable instruction.
-        If it is vague (e.g., "read this", "here", ""), the result is AMBIGUOUS.
+        Step 1: Determine whether the user is actually asking about the uploaded attachment(s) or link(s).
+        If the prompt is clearly unrelated to the attachment(s), output GENERAL.
+        If it might refer to the attachment(s) but is too vague to trust, output AMBIGUOUS.
+        If the prompt depends on the attachment(s), output ATTACHMENT | <category>.
         
-        Step 2: If it is actionable, classify it into ONE of these strict categories based on its semantic meaning:
+        Step 2: If it is an attachment-based request, classify it into ONE of these strict categories based on its semantic meaning:
         - summarization (e.g., "summarize", "tl;dr", "give me the gist", "shorten this")
         - sentiment (e.g., "how does the author feel", "what is the tone", "sentiment")
         - code_explanation (e.g., "explain this code", "find the bug", "fix this script")
         - qa (For any general questions, data extraction, or anything else)
 
         Output ONLY in one of these exact formats:
+        GENERAL
         AMBIGUOUS
-        VALID | <category>
+        ATTACHMENT | <category>
 
         User Prompt: "{clean_prompt}"
+        Attachment Types: {", ".join(sorted(file_exts)) if file_exts else "none"}
         """
         
         intent_res = llm.invoke([HumanMessage(content=intent_prompt)])
         response_text = _content_to_text(intent_res.content).strip().upper()
+
+        if response_text.startswith("GENERAL"):
+            return {
+                **base_state_reset,
+                "intent_type": "conversational",
+                "needs_clarification": False,
+                "plan_trace": [
+                    "Input received: Attached file(s) detected, but the prompt was classified as general chat. Routing to Direct LLM."
+                ],
+                "task_category": "qa"
+            }
 
         if "AMBIGUOUS" in response_text:
             return {
@@ -164,7 +277,7 @@ def ingest_and_classify(state: AgentState) -> Dict[str, Any]:
             }
         
         task = "qa"
-        if "VALID |" in response_text:
+        if "ATTACHMENT |" in response_text:
             try:
                 task = response_text.split("|")[1].strip().lower()
             except IndexError:

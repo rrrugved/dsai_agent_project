@@ -24,7 +24,7 @@ def extract_text_from_image(file_path: str) -> str:
         ext = file_path.split(".")[-1].lower()
         mime_type = f"image/{'jpeg' if ext in ['jpg', 'jpeg'] else ext}"
         
-        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+        llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash")
         
         message = HumanMessage(
             content=[
