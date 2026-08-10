@@ -1,11 +1,32 @@
 import os
 import base64
+from typing import Any
 from dotenv import load_dotenv
 from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 
 load_dotenv()
+
+
+def _content_to_text(content: Any) -> str:
+    """Normalize Gemini responses that may arrive as strings or content blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                if isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+                elif isinstance(item.get("content"), str):
+                    parts.append(item["content"])
+            else:
+                parts.append(str(item))
+        return "".join(parts)
+    return str(content or "")
 
 @tool
 def extract_text_from_image(file_path: str) -> str:
@@ -35,7 +56,7 @@ def extract_text_from_image(file_path: str) -> str:
         
         response = llm.invoke([message])
         
-        extracted_text = response.content.strip()
+        extracted_text = _content_to_text(response.content).strip()
         if not extracted_text:
             return "Vision AI completed but no text could be extracted from the image."
             

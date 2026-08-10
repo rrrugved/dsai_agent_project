@@ -42,6 +42,11 @@ def _mime_type(filename: str) -> str:
         return "audio/mp4"
     return "application/octet-stream"
 
+
+def _attachment_key(item: Dict[str, Any]) -> tuple[str, str, int]:
+    """Return a stable signature so the same upload is not attached twice."""
+    return (item["name"], item["mime_type"], len(item["bytes"]))
+
 def _call_backend(query: str, files: List[Dict[str, Any]], session_id: str) -> Dict[str, Any]:
     multipart_files = [
         ("files", (item["name"], io.BytesIO(item["bytes"]), item["mime_type"]))
@@ -144,15 +149,24 @@ with st.sidebar:
     with col_a:
         if st.button("Attach Files", use_container_width=True):
             if uploads:
+                existing_keys = {_attachment_key(item) for item in st.session_state.attached_files}
+                added_count = 0
                 for item in uploads:
-                    st.session_state.attached_files.append(
-                        {
-                            "name": item.name,
-                            "bytes": item.getvalue(),
-                            "mime_type": _mime_type(item.name),
-                        }
-                    )
-                st.success("Files attached.")
+                    attached_item = {
+                        "name": item.name,
+                        "bytes": item.getvalue(),
+                        "mime_type": _mime_type(item.name),
+                    }
+                    item_key = _attachment_key(attached_item)
+                    if item_key in existing_keys:
+                        continue
+                    st.session_state.attached_files.append(attached_item)
+                    existing_keys.add(item_key)
+                    added_count += 1
+                if added_count:
+                    st.success("Files attached.")
+                else:
+                    st.info("Those files are already attached.")
             else:
                 st.warning("Choose at least one file first.")
 
