@@ -2,6 +2,7 @@ import os
 import math
 import hashlib
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import List, Dict, Any
 from dotenv import load_dotenv
@@ -23,8 +24,6 @@ from langsmith import traceable
 
 load_dotenv()
 
-embeddings = GoogleGenerativeAIEmbeddings(model="gemini-embedding-2-preview",output_dimensionality=768)
-
 CHUNK_SIZE = 1800
 CHUNK_OVERLAP = 200
 DEFAULT_TOP_K = 6
@@ -35,21 +34,16 @@ QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 COLLECTION_NAME = "agent_documents"
 
-if QDRANT_URL and QDRANT_API_KEY:
-    print("Connecting to Qdrant Cloud...")
-    client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
-else:
-    print("Connecting to Local Qdrant...")
-    client = QdrantClient(path="./local_qdrant_db")
-
-if not client.collection_exists(collection_name=COLLECTION_NAME):
-    client.create_collection(
-        collection_name=COLLECTION_NAME,
-        vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+@lru_cache(maxsize=1)
+def get_embeddings() -> GoogleGenerativeAIEmbeddings:
+    """Create the embedding client only when an ingestion or search needs it."""
+    return GoogleGenerativeAIEmbeddings(
+        model="gemini-embedding-2-preview",
+        output_dimensionality=768,
     )
 
 
-def _ensure_source_signature_index() -> None:
+def _ensure_source_signature_index(client: QdrantClient) -> None:
     """Create the payload index required by Qdrant Cloud filtered search."""
     collection = client.get_collection(collection_name=COLLECTION_NAME)
     payload_schema = collection.payload_schema or {}
@@ -61,14 +55,34 @@ def _ensure_source_signature_index() -> None:
             field_schema=PayloadSchemaType.KEYWORD,
         )
 
+@lru_cache(maxsize=1)
+def get_vector_store() -> QdrantVectorStore:
+    """Return one initialized store per process, without import-time API calls.
 
-_ensure_source_signature_index()
+    LangChain validates a collection by embedding ``dummy_text`` by default.
+    We create this collection ourselves with the known 768-dimension Gemini
+    configuration, so that extra quota-consuming validation is unnecessary.
+    """
+    if QDRANT_URL and QDRANT_API_KEY:
+        print("Connecting to Qdrant Cloud...")
+        client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+    else:
+        print("Connecting to Local Qdrant...")
+        client = QdrantClient(path="./local_qdrant_db")
 
-vector_store = QdrantVectorStore(
-    client=client,
-    collection_name=COLLECTION_NAME,
-    embedding=embeddings,
-)
+    if not client.collection_exists(collection_name=COLLECTION_NAME):
+        client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+        )
+
+    _ensure_source_signature_index(client)
+    return QdrantVectorStore(
+        client=client,
+        collection_name=COLLECTION_NAME,
+        embedding=get_embeddings(),
+        validate_collection_config=False,
+    )
 
 
 def _load_ingestion_cache() -> set[str]:
@@ -139,7 +153,7 @@ def ingest_into_qdrant(extracted_map: Dict[str, str]) -> Dict[str, int]:
     chunked_docs = text_splitter.split_documents(documents)
     
     if chunked_docs:
-        vector_store.add_documents(chunked_docs)
+        get_vector_store().add_documents(chunked_docs)
         _save_ingestion_cache(cache)
         
     return {"added_chunks": len(chunked_docs), "skipped_sources": skipped_sources}
@@ -194,7 +208,7 @@ def retrieve_from_qdrant(
             ]
         )
 
-    retrieved_docs = vector_store.similarity_search(query, k=top_k, filter=query_filter)
+    retrieved_docs = get_vector_store().similarity_search(query, k=top_k, filter=query_filter)
     
     if not retrieved_docs:
         return ""
