@@ -1,0 +1,84 @@
+{
+  "name": "DSAI Agent Project - Repo Mirror Workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const repo = 'rrrugved/dsai_agent_project';\nconst branch = 'master';\n\nconst workflow = {\n  repository: repo,\n  branch,\n  components: [\n    'FastAPI backend (backend/main.py)',\n    'Streamlit frontend (frontend/app.py)',\n    'Agent service orchestration (backend/service.py)',\n    'Combined startup script (start.sh)'\n  ],\n  runtimePorts: {\n    backend: 8000,\n    frontend: 10000\n  },\n  endpoints: [\n    'GET /',\n    'GET /health',\n    'POST /chat',\n    'POST /chat/stream'\n  ],\n  startupFlow: [\n    'Start FastAPI with uvicorn backend.main:app --host 0.0.0.0 --port 8000',\n    'Start Streamlit frontend on 0.0.0.0:10000',\n    'Frontend sends chat requests to backend endpoints'\n  ],\n  notes: [\n    'This n8n workflow mirrors repository architecture and execution flow.',\n    'It is designed for inspection/documentation in n8n and can be extended to run shell commands via SSH/Execute Command nodes.'\n  ]\n};\n\nreturn [{ json: workflow }];"
+      },
+      "id": "define-repo-flow",
+      "name": "Define Repo Flow",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            {
+              "name": "summary",
+              "value": "={{`Repository: ${$json.repository}\nBranch: ${$json.branch}\n\nComponents:\n- ${$json.components.join('\\n- ')}\n\nRuntime Ports:\n- Backend: ${$json.runtimePorts.backend}\n- Frontend: ${$json.runtimePorts.frontend}\n\nEndpoints:\n- ${$json.endpoints.join('\\n- ')}\n\nStartup Flow:\n1) ${$json.startupFlow[0]}\n2) ${$json.startupFlow[1]}\n3) ${$json.startupFlow[2]}`}}"
+            }
+          ]
+        }
+      },
+      "id": "render-summary",
+      "name": "Render Summary",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        810,
+        300
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Define Repo Flow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Define Repo Flow": {
+      "main": [
+        [
+          {
+            "node": "Render Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "id": "dsai-agent-project-repo-mirror"
+}
